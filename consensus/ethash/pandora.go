@@ -208,6 +208,15 @@ func (pandora *Pandora) HandleOrchestratorSubscriptions(orcSubscribe bool, ctx c
 			publicKeyBytes, currentErr := hexutil.Decode(validator)
 
 			if nil != currentErr {
+				logger.Error(
+					"invalidPublicKey",
+					"epoch", minimalConsensus.Epoch,
+					"epochTimeStart", minimalConsensus.EpochTimeStart,
+					"validatorListLen", len(minimalConsensus.ValidatorList),
+					"pubKey", validator,
+					"err", currentErr,
+				)
+
 				errChan <- currentErr
 
 				break
@@ -216,6 +225,15 @@ func (pandora *Pandora) HandleOrchestratorSubscriptions(orcSubscribe bool, ctx c
 			coreMinimalConsensus.ValidatorsList[index], currentErr = herumi.PublicKeyFromBytes(publicKeyBytes)
 
 			if nil != currentErr {
+				logger.Error(
+					"could not cast bls publicKey from bytes",
+					"epoch", minimalConsensus.Epoch,
+					"epochTimeStart", minimalConsensus.EpochTimeStart,
+					"validatorListLen", len(minimalConsensus.ValidatorList),
+					"pubKey", validator,
+					"err", currentErr,
+				)
+
 				errChan <- currentErr
 
 				break
@@ -223,6 +241,16 @@ func (pandora *Pandora) HandleOrchestratorSubscriptions(orcSubscribe bool, ctx c
 		}
 
 		currentErr = ethashEngine.InsertMinimalConsensusInfo(minimalConsensus.Epoch, coreMinimalConsensus)
+
+		if nil != currentErr {
+			logger.Error(
+				"Fail to InsertMinimalConsensusInfo",
+				"epoch", minimalConsensus.Epoch,
+				"epochTimeStart", minimalConsensus.EpochTimeStart,
+				"validatorListLen", len(minimalConsensus.ValidatorList),
+				"err", err,
+			)
+		}
 
 		return
 	}
