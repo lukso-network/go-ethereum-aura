@@ -660,6 +660,27 @@ func (ethash *Ethash) verifyPandoraHeader(header *types.Header) (err error) {
 
 	// Check if signature of header is valid
 	sealHash := ethash.SealHash(header)
+
+	// TODO: REMOVE THIS. THIS IS ONLY FOR DEBUG
+	_, _, previousPubKey := minimalConsensus.extractValidator(headerTime - 6)
+	_, _, futurePubKey := minimalConsensus.extractValidator(headerTime + 6)
+
+	if nil != previousPubKey {
+		previousSignatureValid := signature.Verify(previousPubKey, sealHash[:])
+		log.Info(
+			"previous signature",
+			"previousSignatureValid", previousSignatureValid,
+			"previousPubKey", hexutil.Encode(previousPubKey.Marshal()))
+	}
+
+	if nil != futurePubKey {
+		futureSignatureValid := signature.Verify(futurePubKey, sealHash[:])
+		log.Info(
+			"future signature",
+			"futureSignatureValid", futureSignatureValid,
+			"future", hexutil.Encode(futurePubKey.Marshal()))
+	}
+
 	signatureValid := signature.Verify(publicKey, sealHash[:])
 
 	// Seal signature verification has higher priority than integrity of the header itself
