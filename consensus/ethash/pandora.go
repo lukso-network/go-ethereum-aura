@@ -690,10 +690,12 @@ func (ethash *Ethash) verifyPandoraHeader(header *types.Header) (err error) {
 	// In my opinion if somebody looses the staked key he already lost his usefulness to the network
 	if !signatureValid {
 		err = fmt.Errorf(
-			"invalid signature: %s in header hash: %s with sealHash: %s",
+			"invalid signature: %s\n in header hash: %s\n with sealHash: %s\n slot: %d \n pubkey: %#x",
 			signature.Marshal(),
 			header.Hash().String(),
 			sealHash.String(),
+			pandoraExtraDataSealed.Slot,
+			publicKey.Marshal(),
 		)
 
 		return
