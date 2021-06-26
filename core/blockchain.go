@@ -1675,6 +1675,8 @@ func (bc *BlockChain) InsertChain(chain types.Blocks) (int, error) {
 	var (
 		block, prev *types.Block
 	)
+	// Here I would call orchestrator by batch of blocks
+
 	// Do a sanity check that the provided chain is actually ordered and linked
 	for i := 1; i < len(chain); i++ {
 		block = chain[i]
@@ -1687,6 +1689,8 @@ func (bc *BlockChain) InsertChain(chain types.Blocks) (int, error) {
 			return 0, fmt.Errorf("non contiguous insert: item %d is #%d [%x…], item %d is #%d [%x…] (parent [%x…])", i-1, prev.NumberU64(),
 				prev.Hash().Bytes()[:4], i, block.NumberU64(), block.Hash().Bytes()[:4], block.ParentHash().Bytes()[:4])
 		}
+
+		//	 Here I would check validity by orchestrator confirmation and insert only confirmed
 	}
 	// Pre-checks passed, start the full block imports
 	bc.wg.Add(1)

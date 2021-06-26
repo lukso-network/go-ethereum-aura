@@ -863,6 +863,7 @@ func (q *queue) deliver(id string, taskPool map[common.Hash]*types.Header,
 			failure = err
 			break
 		}
+		// Maybe here? Do not append not confirmed hashes to the cycle?
 		hashes = append(hashes, header.Hash())
 		i++
 	}

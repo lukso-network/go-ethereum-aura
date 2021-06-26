@@ -552,6 +552,7 @@ func (d *Downloader) syncWithPeer(p *peerConnection, hash common.Hash, td *big.I
 		}
 	}
 	// Initiate the sync using a concurrent header and content retrieval algorithm
+	// Here lays possible missing code implementation
 	d.queue.Prepare(origin+1, mode)
 	if d.syncInitHook != nil {
 		d.syncInitHook(origin, height)
@@ -562,6 +563,7 @@ func (d *Downloader) syncWithPeer(p *peerConnection, hash common.Hash, td *big.I
 		func() error { return d.fetchReceipts(origin + 1) }, // Receipts are retrieved during fast sync
 		func() error { return d.processHeaders(origin+1, td) },
 	}
+	// Here is possibility to handle
 	if mode == FastSync {
 		d.pivotLock.Lock()
 		d.pivotHeader = pivot
