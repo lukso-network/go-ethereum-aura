@@ -1,0 +1,70 @@
+name: Release
+
+on:
+  create:
+    tags:
+      - v*
+      - p-v*
+
+jobs:
+  release:
+    strategy:
+      matrix:
+        go-version: [ 1.16 ]
+        #         Add additional platforms here if we need more
+        platform: [ ubuntu-latest ]
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Checkout submodules
+        uses: srt32/git-actions@v0.0.3
+        with:
+          args: git submodule update --init --recursive
+
+      - name: Set up Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: ${{ matrix.go-version }}
+        id: go
+
+      - name: Install dependencies
+        run: |
+          go get -v -t -d ./...
+      - name: Build binary
+        run: |
+          mkdir builds &&
+          go build -v --tags=blst_enabled -o ./builds/geth ./cmd/geth
+      # - name: Run GoReleaser
+      #   uses: goreleaser/goreleaser-action@master
+      #   with:
+      #     version: latest
+      #     workdir: ./cmd/geth
+      #     args: release --rm-dist --snapshot --config ../../.github/.goreleaser.yml
+      #   env:
+      #     GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+
+
+      - name: Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.event.release.tag_name }}
+          files: |
+            ./builds/geth
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+
+      - name: Request Multinet Upgrade
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          export GH_TAG=${GITHUB_REF/refs\/tags\//} &&
+          curl -X POST \
+          -H "Accept: application/vnd.github.v3+json" \
+          -d '{"event_type":"upgrade dev", "client_payload": {"repository": "PANDORA", "tag": "'$GH_TAG'"}}' \
+          -u "$GITHUB_TOKEN" \
+          https://api.github.com/repos/lukso-network/l16-multinet/dispatches

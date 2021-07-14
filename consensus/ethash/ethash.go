@@ -282,7 +282,7 @@ func (c *cache) finalizer() {
 
 // dataset wraps an ethash dataset with some metadata to allow easier concurrent use.
 type dataset struct {
-	epoch   uint64    // Epoch for which this cache is relevant
+	epoch   uint64    // epoch for which this cache is relevant
 	dump    *os.File  // File descriptor of the memory mapped cache
 	mmap    mmap.MMap // Memory map itself to unmap before releasing
 	dataset []uint32  // The actual cache data content
@@ -397,6 +397,7 @@ const (
 	ModeTest
 	ModeFake
 	ModeFullFake
+	ModePandora
 )
 
 // Config are the configuration parameters of the ethash.
@@ -421,6 +422,7 @@ type Ethash struct {
 
 	caches   *lru // In memory caches to avoid regenerating too often
 	datasets *lru // In memory datasets to avoid regenerating too often
+	mci      *lru // In memory minimal consensus info. 0 index should contain all info needed for derivation
 
 	// Mining related fields
 	rand     *rand.Rand    // Properly seeded random source for nonces

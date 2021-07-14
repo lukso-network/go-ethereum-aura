@@ -50,6 +50,9 @@ var (
 	// Specification EIP-2384: https://eips.ethereum.org/EIPS/eip-2384
 	calcDifficultyEip2384 = makeDifficultyCalculator(big.NewInt(9000000))
 
+	// Difficulty is not used anymore in pandora vanguard symbiotic relation flow
+	calcDifficultyPandora = func() *big.Int { return big.NewInt(1) }
+
 	// calcDifficultyConstantinople is the difficulty adjustment algorithm for Constantinople.
 	// It returns the difficulty that a new block should have when created at time given the
 	// parent block's time and difficulty. The calculation uses the Byzantium rules, but with
@@ -244,7 +247,7 @@ func (ethash *Ethash) VerifyUncles(chain consensus.ChainReader, block *types.Blo
 // See YP section 4.3.4. "Block Header Validity"
 func (ethash *Ethash) verifyHeader(chain consensus.ChainHeaderReader, header, parent *types.Header, uncle bool, seal bool, unixNow int64) error {
 	// Ensure that the header's extra-data section is of a reasonable size
-	if uint64(len(header.Extra)) > params.MaximumExtraDataSize {
+	if uint64(len(header.Extra)) > params.MaximumExtraDataSize && ModePandora != ethash.config.PowMode {
 		return fmt.Errorf("extra-data too long: %d > %d", len(header.Extra), params.MaximumExtraDataSize)
 	}
 	// Verify the header's timestamp
@@ -315,6 +318,8 @@ func (ethash *Ethash) CalcDifficulty(chain consensus.ChainHeaderReader, time uin
 func CalcDifficulty(config *params.ChainConfig, time uint64, parent *types.Header) *big.Int {
 	next := new(big.Int).Add(parent.Number, big1)
 	switch {
+	case config.IsSilesia(next):
+		return calcDifficultyPandora()
 	case config.IsMuirGlacier(next):
 		return calcDifficultyEip2384(time, parent)
 	case config.IsConstantinople(next):
@@ -515,6 +520,11 @@ func (ethash *Ethash) verifySeal(chain consensus.ChainHeaderReader, header *type
 		digest []byte
 		result []byte
 	)
+	if ModePandora == ethash.config.PowMode {
+		// Here we should check if header hash was sealed by desired validator for a slot
+		return ethash.verifyPandoraHeader(header)
+	}
+
 	// If fast-but-heavy PoW verification was requested, use an ethash dataset
 	if fulldag {
 		dataset := ethash.dataset(number, true)
@@ -543,6 +553,7 @@ func (ethash *Ethash) verifySeal(chain consensus.ChainHeaderReader, header *type
 		// until after the call to hashimotoLight so it's not unmapped while being used.
 		runtime.KeepAlive(cache)
 	}
+
 	// Verify the calculated values against the ones provided in the header
 	if !bytes.Equal(header.MixDigest[:], digest) {
 		return errInvalidMixDigest
@@ -562,6 +573,11 @@ func (ethash *Ethash) Prepare(chain consensus.ChainHeaderReader, header *types.H
 		return consensus.ErrUnknownAncestor
 	}
 	header.Difficulty = ethash.CalcDifficulty(chain, header.Time, parent)
+
+	if ModePandora == ethash.config.PowMode {
+		return ethash.PreparePandoraHeader(header)
+	}
+
 	return nil
 }
 
@@ -587,6 +603,21 @@ func (ethash *Ethash) FinalizeAndAssemble(chain consensus.ChainHeaderReader, hea
 func (ethash *Ethash) SealHash(header *types.Header) (hash common.Hash) {
 	hasher := sha3.NewLegacyKeccak256()
 
+	extraData := header.Extra
+	extraDataLen := len(extraData)
+
+	// Bls signature is 96 bytes long and will be inserted at the bottom of the extraData field
+	if ModePandora == ethash.config.PowMode && extraDataLen > signatureSize {
+		//extraData = extraData[:extraDataLen-signatureSize]
+		pandoraExtraData := new(PandoraExtraDataSealed)
+		pandoraExtraData.FromHeader(header)
+		headerExtra := new(PandoraExtraData)
+		headerExtra.Epoch = pandoraExtraData.Epoch
+		headerExtra.Turn = pandoraExtraData.Turn
+		headerExtra.Slot = pandoraExtraData.Slot
+		extraData, _ = rlp.EncodeToBytes(headerExtra)
+	}
+
 	rlp.Encode(hasher, []interface{}{
 		header.ParentHash,
 		header.UncleHash,
@@ -600,7 +631,7 @@ func (ethash *Ethash) SealHash(header *types.Header) (hash common.Hash) {
 		header.GasLimit,
 		header.GasUsed,
 		header.Time,
-		header.Extra,
+		extraData,
 	})
 	hasher.Sum(hash[:0])
 	return hash

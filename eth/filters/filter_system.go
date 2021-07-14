@@ -52,6 +52,8 @@ const (
 	PendingTransactionsSubscription
 	// BlocksSubscription queries hashes for blocks that are imported
 	BlocksSubscription
+	// PendingHeadsSubscription queries hashes for pending heads that are waiting for orchestrator's validation
+	PendingHeadsSubscription
 	// LastSubscription keeps track of the last index
 	LastIndexSubscription
 )
@@ -93,15 +95,17 @@ type EventSystem struct {
 	rmLogsSub      event.Subscription // Subscription for removed log event
 	pendingLogsSub event.Subscription // Subscription for pending log event
 	chainSub       event.Subscription // Subscription for new chain event
+	pendingHeadSub event.Subscription // Subscription for pending header event
 
 	// Channels
-	install       chan *subscription         // install filter for event notification
-	uninstall     chan *subscription         // remove filter for event notification
-	txsCh         chan core.NewTxsEvent      // Channel to receive new transactions event
-	logsCh        chan []*types.Log          // Channel to receive new log event
-	pendingLogsCh chan []*types.Log          // Channel to receive new log event
-	rmLogsCh      chan core.RemovedLogsEvent // Channel to receive removed log event
-	chainCh       chan core.ChainEvent       // Channel to receive new chain event
+	install       chan *subscription           // install filter for event notification
+	uninstall     chan *subscription           // remove filter for event notification
+	txsCh         chan core.NewTxsEvent        // Channel to receive new transactions event
+	logsCh        chan []*types.Log            // Channel to receive new log event
+	pendingLogsCh chan []*types.Log            // Channel to receive new log event
+	rmLogsCh      chan core.RemovedLogsEvent   // Channel to receive removed log event
+	chainCh       chan core.ChainEvent         // Channel to receive new chain event
+	pendingHeadCh chan core.PendingHeaderEvent // channel to receive new pending header event
 }
 
 // NewEventSystem creates a new manager that listens for event on the given mux,
@@ -121,6 +125,7 @@ func NewEventSystem(backend Backend, lightMode bool) *EventSystem {
 		rmLogsCh:      make(chan core.RemovedLogsEvent, rmLogsChanSize),
 		pendingLogsCh: make(chan []*types.Log, logsChanSize),
 		chainCh:       make(chan core.ChainEvent, chainEvChanSize),
+		pendingHeadCh: make(chan core.PendingHeaderEvent),
 	}
 
 	// Subscribe events
@@ -129,9 +134,10 @@ func NewEventSystem(backend Backend, lightMode bool) *EventSystem {
 	m.rmLogsSub = m.backend.SubscribeRemovedLogsEvent(m.rmLogsCh)
 	m.chainSub = m.backend.SubscribeChainEvent(m.chainCh)
 	m.pendingLogsSub = m.backend.SubscribePendingLogsEvent(m.pendingLogsCh)
+	m.pendingHeadSub = m.backend.SubscribePendingHeaderEvent(m.pendingHeadCh)
 
 	// Make sure none of the subscriptions are empty
-	if m.txsSub == nil || m.logsSub == nil || m.rmLogsSub == nil || m.chainSub == nil || m.pendingLogsSub == nil {
+	if m.txsSub == nil || m.logsSub == nil || m.rmLogsSub == nil || m.chainSub == nil || m.pendingLogsSub == nil || m.pendingHeadSub == nil {
 		log.Crit("Subscribe for event system failed")
 	}
 
@@ -290,6 +296,22 @@ func (es *EventSystem) SubscribeNewHeads(headers chan *types.Header) *Subscripti
 	return es.subscribe(sub)
 }
 
+// SubscribePendingHeads creates a subscription that writes the pending header of a block that is
+// waiting for validation from the orchestrator end.
+func (es *EventSystem) SubscribePendingHeads(pendingHeaders chan *types.Header) *Subscription {
+	sub := &subscription{
+		id:        rpc.NewID(),
+		typ:       PendingHeadsSubscription,
+		created:   time.Now(),
+		logs:      make(chan []*types.Log),
+		hashes:    make(chan []common.Hash),
+		headers:   pendingHeaders,
+		installed: make(chan struct{}),
+		err:       make(chan error),
+	}
+	return es.subscribe(sub)
+}
+
 // SubscribePendingTxs creates a subscription that writes transaction hashes for
 // transactions that enter the transaction pool.
 func (es *EventSystem) SubscribePendingTxs(hashes chan []common.Hash) *Subscription {
@@ -363,6 +385,14 @@ func (es *EventSystem) handleChainEvent(filters filterIndex, ev core.ChainEvent)
 				}
 			}
 		})
+	}
+}
+
+func (es *EventSystem) handlePendingHeaderEvent(index filterIndex, ev core.PendingHeaderEvent) {
+	for _, pendingSubscriptionFilter := range index[PendingHeadsSubscription] {
+		for _, header := range ev.Headers {
+			pendingSubscriptionFilter.headers <- header
+		}
 	}
 }
 
@@ -448,6 +478,7 @@ func (es *EventSystem) eventLoop() {
 		es.rmLogsSub.Unsubscribe()
 		es.pendingLogsSub.Unsubscribe()
 		es.chainSub.Unsubscribe()
+		es.pendingHeadSub.Unsubscribe()
 	}()
 
 	index := make(filterIndex)
@@ -467,6 +498,8 @@ func (es *EventSystem) eventLoop() {
 			es.handlePendingLogs(index, ev)
 		case ev := <-es.chainCh:
 			es.handleChainEvent(index, ev)
+		case ev := <-es.pendingHeadCh:
+			es.handlePendingHeaderEvent(index, ev)
 
 		case f := <-es.install:
 			if f.typ == MinedAndPendingLogsSubscription {
@@ -496,6 +529,8 @@ func (es *EventSystem) eventLoop() {
 		case <-es.rmLogsSub.Err():
 			return
 		case <-es.chainSub.Err():
+			return
+		case <-es.pendingHeadSub.Err():
 			return
 		}
 	}

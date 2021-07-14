@@ -29,6 +29,7 @@ import (
 
 // handleGetBlockHeaders handles Block header query, collect the requested headers and reply
 func handleGetBlockHeaders(backend Backend, msg Decoder, peer *Peer) error {
+	log.Debug("handleGetBlockHeaders", "received header request from remote peer", msg)
 	// Decode the complex header query
 	var query GetBlockHeadersPacket
 	if err := msg.Decode(&query); err != nil {
@@ -40,6 +41,7 @@ func handleGetBlockHeaders(backend Backend, msg Decoder, peer *Peer) error {
 
 // handleGetBlockHeaders66 is the eth/66 version of handleGetBlockHeaders
 func handleGetBlockHeaders66(backend Backend, msg Decoder, peer *Peer) error {
+	log.Debug("handleGetBlockHeaders66", "received header request from remote peer", msg)
 	// Decode the complex header query
 	var query GetBlockHeadersPacket66
 	if err := msg.Decode(&query); err != nil {
@@ -314,24 +316,29 @@ func handleNewBlock(backend Backend, msg Decoder, peer *Peer) error {
 
 func handleBlockHeaders(backend Backend, msg Decoder, peer *Peer) error {
 	// A batch of headers arrived to one of our previous requests
+	log.Debug("handleBlockHeaders", "handle block header request", msg)
 	res := new(BlockHeadersPacket)
 	if err := msg.Decode(res); err != nil {
 		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
 	}
+	log.Debug("received response for handleBlockHeaders", "response", fmt.Sprintf("%v", *res))
 	return backend.Handle(peer, res)
 }
 
 func handleBlockHeaders66(backend Backend, msg Decoder, peer *Peer) error {
 	// A batch of headers arrived to one of our previous requests
+	log.Debug("handleBlockHeaders66", "handle block header request", msg)
 	res := new(BlockHeadersPacket66)
 	if err := msg.Decode(res); err != nil {
 		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
 	}
+	log.Debug("received response for handleBlockHeaders", "response", fmt.Sprintf("%v", *res))
 	return backend.Handle(peer, &res.BlockHeadersPacket)
 }
 
 func handleBlockBodies(backend Backend, msg Decoder, peer *Peer) error {
 	// A batch of block bodies arrived to one of our previous requests
+	log.Debug("handleBlockBodies", "handle block request", msg)
 	res := new(BlockBodiesPacket)
 	if err := msg.Decode(res); err != nil {
 		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
@@ -341,6 +348,7 @@ func handleBlockBodies(backend Backend, msg Decoder, peer *Peer) error {
 
 func handleBlockBodies66(backend Backend, msg Decoder, peer *Peer) error {
 	// A batch of block bodies arrived to one of our previous requests
+	log.Debug("handleBlockBodies66", "handle block request", msg)
 	res := new(BlockBodiesPacket66)
 	if err := msg.Decode(res); err != nil {
 		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
@@ -368,6 +376,7 @@ func handleNodeData66(backend Backend, msg Decoder, peer *Peer) error {
 
 func handleReceipts(backend Backend, msg Decoder, peer *Peer) error {
 	// A batch of receipts arrived to one of our previous requests
+	log.Debug("handleReceipts", "handle receipt request", msg)
 	res := new(ReceiptsPacket)
 	if err := msg.Decode(res); err != nil {
 		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)
@@ -377,6 +386,7 @@ func handleReceipts(backend Backend, msg Decoder, peer *Peer) error {
 
 func handleReceipts66(backend Backend, msg Decoder, peer *Peer) error {
 	// A batch of receipts arrived to one of our previous requests
+	log.Debug("handleReceipts66", "handle receipt request", msg)
 	res := new(ReceiptsPacket66)
 	if err := msg.Decode(res); err != nil {
 		return fmt.Errorf("%w: message %v: %v", errDecode, msg, err)

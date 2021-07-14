@@ -44,14 +44,15 @@ var (
 )
 
 type testBackend struct {
-	mux             *event.TypeMux
-	db              ethdb.Database
-	sections        uint64
-	txFeed          event.Feed
-	logsFeed        event.Feed
-	rmLogsFeed      event.Feed
-	pendingLogsFeed event.Feed
-	chainFeed       event.Feed
+	mux               *event.TypeMux
+	db                ethdb.Database
+	sections          uint64
+	txFeed            event.Feed
+	logsFeed          event.Feed
+	rmLogsFeed        event.Feed
+	pendingLogsFeed   event.Feed
+	chainFeed         event.Feed
+	pendingHeaderFeed event.Feed
 }
 
 func (b *testBackend) ChainDb() ethdb.Database {

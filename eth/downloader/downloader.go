@@ -593,6 +593,7 @@ func (d *Downloader) spawnSync(fetchers []func() error) error {
 			d.queue.Close()
 		}
 		if err = <-errc; err != nil && err != errCanceled {
+			log.Error("spawnSync", "found error", err)
 			break
 		}
 	}
@@ -667,6 +668,7 @@ func (d *Downloader) fetchHead(p *peerConnection) (head *types.Header, pivot *ty
 			return nil, nil, errCanceled
 
 		case packet := <-d.headerCh:
+			log.Trace("headerFetched", "called function name:", "downloader.go/fetchHead")
 			// Discard anything not from the origin peer
 			if packet.PeerId() != p.id {
 				log.Debug("Received headers from incorrect peer", "peer", packet.PeerId())
@@ -851,6 +853,7 @@ func (d *Downloader) findAncestorSpanSearch(p *peerConnection, mode SyncMode, re
 			return 0, errCanceled
 
 		case packet := <-d.headerCh:
+			log.Trace("headerFetched", "called function name:", "downloader.go/findAncestorSpanSearch")
 			// Discard anything not from the origin peer
 			if packet.PeerId() != p.id {
 				log.Debug("Received headers from incorrect peer", "peer", packet.PeerId())
@@ -943,6 +946,7 @@ func (d *Downloader) findAncestorBinarySearch(p *peerConnection, mode SyncMode, 
 				return 0, errCanceled
 
 			case packet := <-d.headerCh:
+				log.Trace("headerFetched", "called function name:", "downloader.go/findAncestorBinarySearch")
 				// Discard anything not from the origin peer
 				if packet.PeerId() != p.id {
 					log.Debug("Received headers from incorrect peer", "peer", packet.PeerId())
@@ -1060,6 +1064,7 @@ func (d *Downloader) fetchHeaders(p *peerConnection, from uint64) error {
 			return errCanceled
 
 		case packet := <-d.headerCh:
+			log.Trace("headerFetched", "called function name:", "downloader.go/fetchHeaders#1067")
 			// Make sure the active peer is giving us the skeleton headers
 			if packet.PeerId() != p.id {
 				log.Debug("Received skeleton from incorrect peer", "peer", packet.PeerId())
@@ -1362,9 +1367,11 @@ func (d *Downloader) fetchParts(deliveryCh chan dataPack, deliver func(dataPack)
 	for {
 		select {
 		case <-d.cancelCh:
+			log.Error("fetchParts", "error found in cancel channel", errCanceled)
 			return errCanceled
 
 		case packet := <-deliveryCh:
+			log.Trace("headerFetched", "called function name:", "downloader.go/fetchParts")
 			deliveryTime := time.Now()
 			// If the peer was previously banned and failed to deliver its pack
 			// in a reasonable time frame, ignore its message.
@@ -1449,6 +1456,7 @@ func (d *Downloader) fetchParts(deliveryCh chan dataPack, deliver func(dataPack)
 
 							if master {
 								d.cancel()
+								log.Error("fetch parts", "cancelled download", errTimeout)
 								return errTimeout
 							}
 						}
@@ -1561,6 +1569,7 @@ func (d *Downloader) processHeaders(origin uint64, td *big.Int) error {
 
 		case headers := <-d.headerProcCh:
 			// Terminate header processing if we synced up
+			log.Trace("processHeaders", "received new headers", len(headers))
 			if len(headers) == 0 {
 				// Notify everyone that headers are fully processed
 				for _, ch := range []chan bool{d.bodyWakeCh, d.receiptWakeCh} {
@@ -1636,7 +1645,9 @@ func (d *Downloader) processHeaders(origin uint64, td *big.Int) error {
 					if chunk[len(chunk)-1].Number.Uint64()+uint64(fsHeaderForceVerify) > pivot {
 						frequency = 1
 					}
+					log.Trace("InsertHeaderChain", "calling insert header channel from downloader.go", chunk)
 					if n, err := d.lightchain.InsertHeaderChain(chunk, frequency); err != nil {
+						log.Error("found error while inserting header chain", "error ", err)
 						rollbackErr = err
 
 						// If some headers were inserted, track them as uncertain

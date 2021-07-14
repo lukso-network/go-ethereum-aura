@@ -25,6 +25,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ethereum/go-ethereum/log"
+
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -208,6 +210,51 @@ func (api *PublicFilterAPI) NewBlockFilter() rpc.ID {
 	}()
 
 	return headerSub.ID
+}
+
+// PandoraPendingHeaderFilter is responsible for passing parameter to NewPendingBlockHeaders function
+type PandoraPendingHeaderFilter struct {
+	FromBlockHash common.Hash `json:"fromBlockHash"`
+}
+
+// NewPendingBlockHeaders send a notification each time a new header block is added to the pending queue
+func (api *PublicFilterAPI) NewPendingBlockHeaders(ctx context.Context, pendingFilter PandoraPendingHeaderFilter) (*rpc.Subscription, error) {
+	notifier, supported := rpc.NotifierFromContext(ctx)
+	if !supported {
+		return &rpc.Subscription{}, rpc.ErrNotificationsUnsupported
+	}
+
+	rpcSub := notifier.CreateSubscription()
+	go func() {
+		// first send all available pending headers from the pending queue
+		pendingHeaders := api.backend.GetPendingHeadsSince(ctx, pendingFilter.FromBlockHash)
+		for _, pendingHeader := range pendingHeaders {
+			log.Debug("pending headers are sending first", "from", pendingFilter.FromBlockHash, "header hash", pendingHeader.Hash())
+			notifier.Notify(rpcSub.ID, pendingHeader)
+		}
+
+		// accept PendingHeaderChannelSize concurrent pending headers and send them
+		// If anything goes wrong remove it.
+		headers := make(chan *types.Header)
+		headersSub := api.events.SubscribePendingHeads(headers)
+
+		for {
+			select {
+			case h := <-headers:
+				notifier.Notify(rpcSub.ID, h)
+			case rpcErr := <-rpcSub.Err():
+				log.Debug("error found in rpc subscription", rpcErr)
+				headersSub.Unsubscribe()
+				return
+			case <-notifier.Closed():
+				headersSub.Unsubscribe()
+				return
+			}
+		}
+
+	}()
+
+	return rpcSub, nil
 }
 
 // NewHeads send a notification each time a new (header) block is appended to the chain.

@@ -531,6 +531,7 @@ func (s *stateSync) process(req *stateReq) (int, error) {
 
 	// Iterate over all the delivered data and inject one-by-one into the trie
 	for _, blob := range req.response {
+		log.Debug("process response", "processing", blob)
 		hash, err := s.processNodeData(blob)
 		switch err {
 		case nil:

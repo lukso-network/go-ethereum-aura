@@ -209,6 +209,12 @@ func CreateConsensusEngine(stack *node.Node, chainConfig *params.ChainConfig, co
 	if chainConfig.Clique != nil {
 		return clique.New(chainConfig.Clique, db)
 	}
+
+	// In proof of stake use pandora minimal approach
+	if nil != chainConfig.PandoraConfig {
+		config.PowMode = ethash.ModePandora
+	}
+
 	// Otherwise assume proof-of-work
 	switch config.PowMode {
 	case ethash.ModeFake:
@@ -220,6 +226,28 @@ func CreateConsensusEngine(stack *node.Node, chainConfig *params.ChainConfig, co
 	case ethash.ModeShared:
 		log.Warn("Ethash used in shared mode")
 		return ethash.NewShared()
+	case ethash.ModePandora:
+		log.Warn("Ethash used in pandora mode")
+		engine := ethash.NewPandora(
+			ethash.Config{
+				CacheDir:         stack.ResolvePath(config.CacheDir),
+				CachesInMem:      config.CachesInMem,
+				CachesOnDisk:     config.CachesOnDisk,
+				CachesLockMmap:   config.CachesLockMmap,
+				DatasetDir:       config.DatasetDir,
+				DatasetsInMem:    config.DatasetsInMem,
+				DatasetsOnDisk:   config.DatasetsOnDisk,
+				DatasetsLockMmap: config.DatasetsLockMmap,
+				PowMode:          ethash.ModePandora,
+			},
+			notify,
+			noverify,
+			chainConfig.PandoraConfig.ConsensusInfo,
+			true,
+		)
+		engine.SetThreads(-1) // Disable CPU mining
+
+		return engine
 	default:
 		engine := ethash.New(ethash.Config{
 			CacheDir:         stack.ResolvePath(config.CacheDir),
@@ -232,6 +260,7 @@ func CreateConsensusEngine(stack *node.Node, chainConfig *params.ChainConfig, co
 			DatasetsLockMmap: config.DatasetsLockMmap,
 		}, notify, noverify)
 		engine.SetThreads(-1) // Disable CPU mining
+
 		return engine
 	}
 }

@@ -21,6 +21,8 @@ import (
 	"math/rand"
 	"sync"
 
+	"github.com/ethereum/go-ethereum/log"
+
 	mapset "github.com/deckarep/golang-set"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -348,11 +350,13 @@ func (p *Peer) AsyncSendNewBlock(block *types.Block, td *big.Int) {
 
 // SendBlockHeaders sends a batch of block headers to the remote peer.
 func (p *Peer) SendBlockHeaders(headers []*types.Header) error {
+	log.Debug("SendBlockHeaders", "sending block headers to remote", headers)
 	return p2p.Send(p.rw, BlockHeadersMsg, BlockHeadersPacket(headers))
 }
 
 // ReplyBlockHeaders is the eth/66 version of SendBlockHeaders.
 func (p *Peer) ReplyBlockHeaders(id uint64, headers []*types.Header) error {
+	log.Debug("ReplyBlockHeaders", "sending block headers to remote", headers)
 	return p2p.Send(p.rw, BlockHeadersMsg, BlockHeadersPacket66{
 		RequestId:          id,
 		BlockHeadersPacket: headers,
@@ -362,12 +366,14 @@ func (p *Peer) ReplyBlockHeaders(id uint64, headers []*types.Header) error {
 // SendBlockBodiesRLP sends a batch of block contents to the remote peer from
 // an already RLP encoded format.
 func (p *Peer) SendBlockBodiesRLP(bodies []rlp.RawValue) error {
+	log.Debug("SendBlockBodiesRLP", "sending block bodies to remote", bodies)
 	return p2p.Send(p.rw, BlockBodiesMsg, bodies) // Not packed into BlockBodiesPacket to avoid RLP decoding
 }
 
 // ReplyBlockBodiesRLP is the eth/66 version of SendBlockBodiesRLP.
 func (p *Peer) ReplyBlockBodiesRLP(id uint64, bodies []rlp.RawValue) error {
 	// Not packed into BlockBodiesPacket to avoid RLP decoding
+	log.Debug("ReplyBlockBodiesRLP", "sending block bodies to remote", bodies)
 	return p2p.Send(p.rw, BlockBodiesMsg, BlockBodiesRLPPacket66{
 		RequestId:            id,
 		BlockBodiesRLPPacket: bodies,
@@ -391,11 +397,13 @@ func (p *Peer) ReplyNodeData(id uint64, data [][]byte) error {
 // SendReceiptsRLP sends a batch of transaction receipts, corresponding to the
 // ones requested from an already RLP encoded format.
 func (p *Peer) SendReceiptsRLP(receipts []rlp.RawValue) error {
+	log.Debug("SendReceiptsRLP", "sending block bodies to remote", receipts)
 	return p2p.Send(p.rw, ReceiptsMsg, receipts) // Not packed into ReceiptsPacket to avoid RLP decoding
 }
 
 // ReplyReceiptsRLP is the eth/66 response to GetReceipts.
 func (p *Peer) ReplyReceiptsRLP(id uint64, receipts []rlp.RawValue) error {
+	log.Debug("ReplyReceiptsRLP", "sending block bodies to remote", receipts)
 	return p2p.Send(p.rw, ReceiptsMsg, ReceiptsRLPPacket66{
 		RequestId:         id,
 		ReceiptsRLPPacket: receipts,

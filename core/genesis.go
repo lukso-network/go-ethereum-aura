@@ -383,6 +383,15 @@ func DefaultGoerliGenesisBlock() *Genesis {
 	}
 }
 
+// DefaultPandoraGenesisBlock return the Pandora network genesis block
+func DefaultPandoraGenesisBlock() *Genesis {
+	genesis := DefaultGoerliGenesisBlock()
+	genesis.Config = params.PandoraChainConfig
+	genesis.Config.SilesiaBlock = big.NewInt(0)
+
+	return genesis
+}
+
 func DefaultYoloV3GenesisBlock() *Genesis {
 	// Full genesis: https://gist.github.com/holiman/c6ed9269dce28304ad176314caa75e97
 	return &Genesis{

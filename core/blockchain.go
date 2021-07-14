@@ -18,15 +18,20 @@
 package core
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"math/big"
 	mrand "math/rand"
+	"net/url"
 	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/ethereum/go-ethereum/consensus/ethash"
+	"github.com/ethereum/go-ethereum/pandora_orcclient"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/mclock"
@@ -117,6 +122,11 @@ const (
 	BlockChainVersion uint64 = 8
 )
 
+const (
+	// orchestratorConfirmationRetrievalLimit is the maximum limit of orchestrator client confirmation retrieval
+	orchestratorConfirmationRetrievalLimit = 10
+)
+
 // CacheConfig contains the configuration values for the trie caching/pruning
 // that's resident in a blockchain.
 type CacheConfig struct {
@@ -130,7 +140,8 @@ type CacheConfig struct {
 	SnapshotLimit       int           // Memory allowance (MB) to use for caching snapshot entries in memory
 	Preimages           bool          // Whether to store preimage of trie key to the disk
 
-	SnapshotWait bool // Wait for snapshot construction on startup. TODO(karalabe): This is a dirty hack for testing, nuke it
+	SnapshotWait      bool        // Wait for snapshot construction on startup. TODO(karalabe): This is a dirty hack for testing, nuke it
+	OrcClientEndpoint interface{} // It is a temporary hack. Will change it when refactoring. It is the address of orchestrator client.
 }
 
 // defaultCacheConfig are the default caching values if none are specified by the
@@ -210,6 +221,13 @@ type BlockChain struct {
 	shouldPreserve     func(*types.Block) bool        // Function used to determine whether should preserve the given block.
 	terminateInsert    func(common.Hash, uint64) bool // Testing hook used to terminate ancient receipt chain insertion.
 	writeLegacyJournal bool                           // Testing flag used to flush the snapshot journal in legacy format.
+
+	pendingHeaderContainer *PandoraPendingHeaderContainer // in memory temporary header container which holds headers for orchestrator confirmation.
+	confirmedBlockHashes   event.Feed                     // orchestrator client will pass fetched response using this event.
+
+	// pandora-orchestrator data passing
+	orcClientSubscriber event.Subscription
+	blockConfirmationCh chan []*pandora_orcclient.BlockStatus
 }
 
 // NewBlockChain returns a fully initialised block chain using information
@@ -226,6 +244,8 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, chainConfig *par
 	txLookupCache, _ := lru.New(txLookupCacheLimit)
 	futureBlocks, _ := lru.New(maxFutureBlocks)
 
+	headerContainer := NewPandoraPendingHeaderContainer()
+
 	bc := &BlockChain{
 		chainConfig: chainConfig,
 		cacheConfig: cacheConfig,
@@ -236,20 +256,24 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, chainConfig *par
 			Journal:   cacheConfig.TrieCleanJournal,
 			Preimages: cacheConfig.Preimages,
 		}),
-		quit:           make(chan struct{}),
-		shouldPreserve: shouldPreserve,
-		bodyCache:      bodyCache,
-		bodyRLPCache:   bodyRLPCache,
-		receiptsCache:  receiptsCache,
-		blockCache:     blockCache,
-		txLookupCache:  txLookupCache,
-		futureBlocks:   futureBlocks,
-		engine:         engine,
-		vmConfig:       vmConfig,
+		quit:                   make(chan struct{}),
+		shouldPreserve:         shouldPreserve,
+		bodyCache:              bodyCache,
+		bodyRLPCache:           bodyRLPCache,
+		receiptsCache:          receiptsCache,
+		blockCache:             blockCache,
+		txLookupCache:          txLookupCache,
+		futureBlocks:           futureBlocks,
+		engine:                 engine,
+		vmConfig:               vmConfig,
+		pendingHeaderContainer: headerContainer,
+		blockConfirmationCh:    make(chan []*pandora_orcclient.BlockStatus),
 	}
 	bc.validator = NewBlockValidator(chainConfig, bc, engine)
 	bc.prefetcher = newStatePrefetcher(chainConfig, bc, engine)
 	bc.processor = NewStateProcessor(chainConfig, bc, engine)
+
+	bc.orcClientSubscriber = bc.SubscribeConfirmedBlockHashFetcher(bc.blockConfirmationCh)
 
 	var err error
 	bc.hc, err = NewHeaderChain(db, chainConfig, engine, bc.insertStopped)
@@ -395,12 +419,140 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, chainConfig *par
 			triedb.SaveCachePeriodically(bc.cacheConfig.TrieCleanJournal, bc.cacheConfig.TrieCleanRejournal, bc.quit)
 		}()
 	}
+
+	// check if we are running pandora engine. If so, only then call the go routine
+	if bc.isPandora() {
+		// consensus engine is on pandora mode. Now run the orchestrator go routine
+		go func() {
+			err := bc.pandoraBlockHashConfirmationFetcher()
+			if err != nil {
+				log.Error("error found while fetching confirmed block hashes from orchestrator", "err", err)
+			}
+		}()
+	}
+
 	return bc, nil
 }
 
 // GetVMConfig returns the block chain VM config.
 func (bc *BlockChain) GetVMConfig() *vm.Config {
 	return &bc.vmConfig
+}
+
+// isPandora returns if we are running pandora engine
+func (bc *BlockChain) isPandora() bool {
+	ethashEngine, isEthashEngine := bc.engine.(*ethash.Ethash)
+	return isEthashEngine && ethashEngine.IsPandoraModeEnabled()
+}
+
+// pandoraBlockHashConfirmationFetcher is a ticker based loop. In every 2 sec, it calls
+// the orchestrator client with a set of headers and fetch response from the orchestrator.
+// If it gets any response, it will send that response in the feed.
+// Miner and blockchain both are initialized from the backend. So this is a suitable place
+// to write subscriber. Both Miner and blockchain can subscribe for the event from Ethereum.
+func (bc *BlockChain) pandoraBlockHashConfirmationFetcher() error {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	var orcClient *pandora_orcclient.OrcClient
+
+	switch orcClientObject := bc.cacheConfig.OrcClientEndpoint.(type) {
+	case []string:
+		// This may not be a good solution. But for now we are using it temporarily. In future we will change it.
+		// Miner.Notify will take an HTTP address of the orchestrator client.
+		// pandora engine using an web socket address in 0-th index.
+		// Thus, we are using http address at index- 1.
+		if len(orcClientObject) < 1 {
+			return errors.New("orchestrator http endpoint not provided")
+		}
+
+		// expecting http / https endpoint address. If not given throw an error
+		parsedUrl, err := url.Parse(orcClientObject[1])
+		if err != nil {
+			return err
+		}
+
+		// first initialize orchestrator client
+		switch parsedUrl.Scheme {
+		case "http", "https":
+			orcClient, err = pandora_orcclient.Dial(orcClientObject[1])
+			if err != nil {
+				return err
+			}
+
+		default:
+			return fmt.Errorf("expecting http or https scheme. but provided %s", parsedUrl.Scheme)
+		}
+	case *pandora_orcclient.OrcClient:
+		// for testing purpose we will send in process orchestrator client. we have to use it
+		orcClient = orcClientObject
+	default:
+		return fmt.Errorf("unsupported orchestrator client type")
+	}
+
+	for {
+		select {
+		case <-ticker.C:
+			// prepare header requests
+			headers := bc.GetPendingHeaderContainer().ReadAllHeaders()
+			if len(headers) == 0 {
+				// no header found. nothing to prepare request. simply continue
+				continue
+			}
+			log.Debug("tick", "retrieving pending headers", headers)
+
+			request, err := preparePanBlockHashRequest(headers)
+			if err != nil {
+				log.Error("got error when preparing pandora block hash request", "error", err)
+				continue
+			}
+
+			log.Debug("sending request to the orchestrator", "request", request)
+
+			blockHashResponse, err := orcClient.GetConfirmedPanBlockHashes(context.Background(), request)
+			if err != nil {
+				log.Error("got error when calling orchestrator for getting confirmation request", "error", err)
+				continue
+			}
+			log.Debug("got confirmation", "sending to the feed", blockHashResponse)
+			// send the blockhash in the feed. Thus, miner and insertchain will be able to listen it.
+			bc.confirmedBlockHashes.Send(blockHashResponse)
+
+		case <-bc.quit:
+			// Ethereum service is closed. Break the loop
+			//close orc client
+			orcClient.Close()
+			return nil
+		}
+	}
+}
+
+// preparePanBlockHashRequest prepares pandora BlockHash request for the orchestrator client.
+// After preparing request it will sort the request in slot ascending order.
+func preparePanBlockHashRequest(headers []*types.Header) ([]*pandora_orcclient.BlockHash, error) {
+	var blockHashes []*pandora_orcclient.BlockHash
+	for _, header := range headers {
+		pandoraExtraData := ethash.PandoraExtraDataSealed{}
+		err := rlp.DecodeBytes(header.Extra, &pandoraExtraData)
+		if err != nil {
+			log.Error("found error while decoding pandora extra data", err)
+			return nil, err
+		}
+		log.Debug("preparing request", "block number", header.Number, "slot number", pandoraExtraData.Slot)
+		blockHashes = append(blockHashes, &pandora_orcclient.BlockHash{Slot: pandoraExtraData.Slot, Hash: header.Hash()})
+	}
+
+	if len(blockHashes) > 0 {
+		sort.SliceStable(blockHashes, func(i, j int) bool {
+			return blockHashes[i].Slot < blockHashes[j].Slot
+		})
+	}
+
+	return blockHashes, nil
+}
+
+func (bc *BlockChain) SubscribeConfirmedBlockHashFetcher(ch chan<- []*pandora_orcclient.BlockStatus) event.Subscription {
+	return bc.confirmedBlockHashes.Subscribe(ch)
 }
 
 // empty returns an indicator whether the blockchain is empty.
@@ -1504,6 +1656,42 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 	bc.wg.Add(1)
 	defer bc.wg.Done()
 
+	// verification is done. Now if pandora mode is running then push it into the queue
+	// After that, wait for response of the orchestrator client.
+	if bc.isPandora() {
+		log.Debug("writeBlockWithState", "sending header with header hash", block.Header().Hash())
+		bc.pendingHeaderContainer.WriteAndNotifyHeader(block.Header())
+
+		retryLimit := orchestratorConfirmationRetrievalLimit
+		status := pandora_orcclient.Pending
+		for retryLimit > 0 && status == pandora_orcclient.Pending {
+			// halt and get orchestrator confirmation
+			log.Debug("waiting to get block confirmation", "fetching...", retryLimit)
+			confirmedBlocks := <-bc.blockConfirmationCh
+			for _, confirmedBlock := range confirmedBlocks {
+				if confirmedBlock.Hash == block.Hash() {
+					status = confirmedBlock.Status
+					log.Debug("found confirmation", "confirmed block status", status)
+				}
+				if status != pandora_orcclient.Pending {
+					// if status is invalid or correct then break the loop
+					break
+				}
+			}
+			retryLimit--
+		}
+		log.Debug("deleting from pending container", "header hash", block.Hash())
+		// remove the header from the pending queue
+		bc.GetPendingHeaderContainer().DeleteHeader(block.Header())
+		// if status is pending or invalid then just continue default work
+		if status == pandora_orcclient.Pending || status == pandora_orcclient.Invalid || status == pandora_orcclient.Skipped {
+			log.Warn("failed to write block into the chain", "block hash", block.Hash())
+			return CanonStatTy, consensus.ErrInvalidBlock
+		}
+		// if status is approved then write block in canonical chain.
+		log.Debug("block is verified. so continuing existing parts", "block header hash", block.Header().Hash())
+	}
+
 	// Calculate the total difficulty of the block
 	ptd := bc.GetTd(block.ParentHash(), block.NumberU64()-1)
 	if ptd == nil {
@@ -2425,6 +2613,12 @@ func (bc *BlockChain) InsertHeaderChain(chain []*types.Header, checkFreq int) (i
 	if i, err := bc.hc.ValidateHeaderChain(chain, checkFreq); err != nil {
 		return i, err
 	}
+	//// save chain in the in-memory database
+	//bc.pendingHeaderContainer.WriteHeaderBatch(chain)
+	//
+	//// send chain to the subscribed orchestrator.
+	//bc.pendingHeaderContainer.pndHeaderFeed.Send(PendingHeaderEvent{Headers: chain})
+	//// TODO: in future we will halt execution here to get confirmation from orchestrator.
 
 	// Make sure only one thread manipulates the chain at once
 	bc.chainmu.Lock()
@@ -2514,6 +2708,16 @@ func (bc *BlockChain) GetTransactionLookup(hash common.Hash) *rawdb.LegacyTxLook
 	return lookup
 }
 
+// GetTempHeadersSince returns in-memory saved temporary headers so that orchestrator can validate it
+func (bc *BlockChain) GetTempHeadersSince(from common.Hash) []*types.Header {
+	return bc.pendingHeaderContainer.ReadHeaderSince(from)
+}
+
+// GetPendingHeaderContainer exposes pending header container to the miner. So that newly mined block can be added
+func (bc *BlockChain) GetPendingHeaderContainer() *PandoraPendingHeaderContainer {
+	return bc.pendingHeaderContainer
+}
+
 // Config retrieves the chain's fork configuration.
 func (bc *BlockChain) Config() *params.ChainConfig { return bc.chainConfig }
 
@@ -2549,4 +2753,9 @@ func (bc *BlockChain) SubscribeLogsEvent(ch chan<- []*types.Log) event.Subscript
 // block processing has started while false means it has stopped.
 func (bc *BlockChain) SubscribeBlockProcessingEvent(ch chan<- bool) event.Subscription {
 	return bc.scope.Track(bc.blockProcFeed.Subscribe(ch))
+}
+
+// SubscribePendingHeaderEvent registers a subscription of *types.Header
+func (bc *BlockChain) SubscribePendingHeaderEvent(ch chan<- PendingHeaderEvent) event.Subscription {
+	return bc.scope.Track(bc.pendingHeaderContainer.pndHeaderFeed.Subscribe(ch))
 }

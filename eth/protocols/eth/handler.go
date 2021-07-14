@@ -21,6 +21,8 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/ethereum/go-ethereum/log"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -243,6 +245,7 @@ func handleMessage(backend Backend, peer *Peer) error {
 	}
 
 	if handler := handlers[msg.Code]; handler != nil {
+		log.Debug("handleMessage", "message code", msg.Code)
 		return handler(backend, msg, peer)
 	}
 	return fmt.Errorf("%w: %v", errInvalidMsgCode, msg.Code)
