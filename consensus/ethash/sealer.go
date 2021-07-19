@@ -308,6 +308,7 @@ func (s *remoteSealer) loop() {
 				work.errc <- errNoMiningWork
 			} else {
 				work.res <- s.currentWork
+				s.ethash.config.Log.Debug("triggered fetchWorkCh from sealer loop", "currentWork", s.currentWork)
 			}
 
 		case result := <-s.submitWorkCh:

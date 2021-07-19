@@ -309,6 +309,7 @@ func (pandora *Pandora) Loop() {
 				work.errc <- errNoMiningWork
 			} else {
 				work.res <- s.currentWork
+				log.Debug("triggered fetchWorkCh from pandora loop", "currentWork", s.currentWork)
 			}
 
 		case result := <-s.submitWorkCh:
@@ -394,7 +395,6 @@ func (pandora *Pandora) submitWork(nonce types.BlockNonce, mixDigest common.Hash
 	}
 	// Verify the correctness of submitted result.
 	header := block.Header()
-	header.Nonce = nonce
 	extraDataWithSignature := new(PandoraExtraDataSealed)
 	blsSignature, err := herumi.SignatureFromBytes(blsSignatureBytes[:])
 
@@ -796,8 +796,13 @@ func NewPandoraExtraData(header *types.Header, minimalConsensus *MinimalEpochCon
 		return
 	}
 
+	calculatedSlot := uint64(len(minimalConsensus.ValidatorsList))*derivedEpoch + extractedTurn
+	log.Debug("In newPandoraExtraData", "calculated slot", calculatedSlot, "header time", headerTime, "derived epoch", derivedEpoch, "epoch time start", epochTimeStart)
+	if derivedEpoch == 0 && calculatedSlot == 0 {
+		calculatedSlot++
+	}
 	extraData = &PandoraExtraData{
-		Slot:  uint64(len(minimalConsensus.ValidatorsList))*derivedEpoch + extractedTurn,
+		Slot:  calculatedSlot,
 		Epoch: derivedEpoch,
 		Turn:  extractedTurn,
 	}
